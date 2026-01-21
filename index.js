@@ -14,7 +14,7 @@ const SECRET_KEY = process.env.SECRET_KEY;
 // --------------------
 // 메모리 DB
 // --------------------
-const users = []; // { id, username, password, name, picture }
+const users = []; 
 let userAutoId = 1;
 
 // --------------------
@@ -22,7 +22,9 @@ let userAutoId = 1;
 // --------------------
 function auth(req, res, next) {
   const header = req.headers.authorization;
-  if (!header) return res.status(401).json({ message: "Authorization 헤더 없음" });
+  if (!header) {
+    return res.status(401).json({ message: "Authorization 헤더 없음" });
+  }
 
   const [type, token] = header.split(" ");
   if (type !== "Bearer" || !token) {
@@ -39,46 +41,116 @@ function auth(req, res, next) {
 }
 
 // --------------------
-// 4️⃣ 구글 로그인 (OAuth)
+// 1️⃣ 회원가입
+// --------------------
+app.post("/register", (req, res) => {
+  const { username, password, name, email } = req.body;
+
+  if (!username || !password || !email) {
+    return res.status(400).json({ message: "필수 값 누락" });
+  }
+
+  const exists = users.find(u => u.username === username);
+  if (exists) {
+    return res.status(400).json({ message: "이미 존재하는 사용자" });
+  }
+
+  users.push({
+    id: userAutoId++,
+    username,
+    password,
+    name,
+    email,
+    picture: null,
+  });
+
+  return res.json({ success: true });
+});
+
+// --------------------
+// 2️⃣ 로그인
+// --------------------
+app.post("/login", (req, res) => {
+  const { username, password } = req.body;
+
+  const user = users.find(
+    u => u.username === username && u.password === password
+  );
+
+  if (!user) {
+    return res.status(401).json({ message: "로그인 실패" });
+  }
+
+  const token = jwt.sign(
+    { userId: user.id, username: user.username },
+    SECRET_KEY,
+    { expiresIn: "2h" }
+  );
+
+  return res.json({
+    token,
+    user: {
+      name: user.name,
+      picture: user.picture,
+    },
+  });
+});
+
+// --------------------
+// 3️⃣ 마이페이지
+// --------------------
+app.get("/mypage", auth, (req, res) => {
+  const user = users.find(u => u.id === req.user.userId);
+  if (!user) {
+    return res.status(404).json({ message: "유저 없음" });
+  }
+
+  return res.json({
+    user: {
+      name: user.name,
+      picture: user.picture,
+    },
+    data: {
+      properties: "잔금",
+    },
+  });
+});
+
+// --------------------
+// 4️⃣ 구글 로그인
 // --------------------
 app.post("/auth/google", async (req, res) => {
-  const { code } = req.body || {};
+  const { code } = req.body;
   if (!code) {
     return res.status(400).json({ message: "authorization code 없음" });
   }
 
   try {
-    // ✅ 핵심 수정 포인트
-    // redirect_uri는 "프론트 기준"으로 고정
+    // 1) 토큰 교환
     const tokenRes = await axios.post(
       "https://oauth2.googleapis.com/token",
       {
         code,
         client_id: process.env.GOOGLE_CLIENT_ID,
         client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: "http://localhost:3000/loading", // ⭐️ 여기!
+        redirect_uri: process.env.GOOGLE_REDIRECT_URI,
         grant_type: "authorization_code",
-      },
-      {
-        headers: { "Content-Type": "application/json" },
       }
     );
 
     const { access_token } = tokenRes.data;
 
-    // 2) 유저 정보 조회
+    // 2) 유저 정보
     const userRes = await axios.get(
       "https://www.googleapis.com/oauth2/v2/userinfo",
       {
-        headers: {
-          Authorization: `Bearer ${access_token}`,
-        },
+        headers: { Authorization: `Bearer ${access_token}` },
       }
     );
 
     const { name, email, picture } = userRes.data;
 
-    // 3) 유저 생성 or 조회
+    // 3) 유저 조회/생성
     let user = users.find(u => u.username === email);
     if (!user) {
       user = {
@@ -86,6 +158,7 @@ app.post("/auth/google", async (req, res) => {
         username: email,
         password: null,
         name,
+        email,
         picture,
       };
       users.push(user);
@@ -93,22 +166,21 @@ app.post("/auth/google", async (req, res) => {
 
     // 4) JWT 발급
     const token = jwt.sign(
-      { userId: user.id },
+      { userId: user.id, username: user.username },
       SECRET_KEY,
       { expiresIn: "2h" }
     );
 
-    // 5) 응답
     return res.json({
       token,
       user: {
         name: user.name,
-        picture: user.picture
-      }
+        picture: user.picture,
+      },
     });
 
   } catch (err) {
-    console.error("❌ Google OAuth 실패:", err.response?.data || err.message);
+    console.error("Google OAuth 실패:", err.response?.data || err.message);
     return res.status(500).json({ message: "Google OAuth 실패" });
   }
 });
